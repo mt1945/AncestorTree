@@ -42,7 +42,7 @@ export default function LoginPage() {
           </div>
           <CardTitle>Đăng nhập</CardTitle>
           <CardDescription>
-            Đăng nhập vào Gia Phả Điện Tử - Họ Đặng làng Kỷ Các
+            Đăng nhập vào Gia Phả Điện Tử - Họ Đinh làng Vĩnh Thượng
           </CardDescription>
         </CardHeader>
         <CardContent>
