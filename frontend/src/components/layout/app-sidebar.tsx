@@ -91,8 +91,8 @@ export function AppSidebar() {
             Đ
           </div>
           <div className="flex flex-col">
-            <span className="font-semibold text-sm">Họ Đặng</span>
-            <span className="text-xs text-muted-foreground">làng Kỷ Các</span>
+            <span className="font-semibold text-sm">Họ Đinh</span>
+            <span className="text-xs text-muted-foreground">làng Vĩnh Thượng</span>
           </div>
         </Link>
       </SidebarHeader>
