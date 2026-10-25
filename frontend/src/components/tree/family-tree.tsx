@@ -48,7 +48,8 @@ import Link from 'next/link';
 // ═══════════════════════════════════════════════════════════════════════════
 
 const NODE_WIDTH = 120;
-const NODE_HEIGHT = 80;
+const NODE_HEIGHT = 100;
+const BUTTON_OVERFLOW = 16; // extra space below node so collapse button is not clipped
 const LEVEL_HEIGHT = 140;
 const SIBLING_GAP = 20;
 const MINIMAP_WIDTH = 160;
@@ -110,12 +111,19 @@ function TreeNode({ node, onSelect, onToggleCollapse, isSelected }: TreeNodeProp
       exit={{ opacity: 0, scale: 0.8 }}
       transition={{ duration: 0.3 }}
     >
-      <foreignObject x={x} y={y} width={NODE_WIDTH} height={NODE_HEIGHT}>
+      <foreignObject
+        x={x}
+        y={y}
+        width={NODE_WIDTH}
+        height={NODE_HEIGHT + BUTTON_OVERFLOW}
+        style={{ overflow: 'visible' }}
+      >
         <div
-          className={`h-full bg-card border-2 ${genderColor} ${selectedRing} rounded-lg shadow-sm cursor-pointer hover:shadow-md transition-all p-2 flex flex-col items-center justify-center relative`}
+          style={{ height: NODE_HEIGHT }}
+          className={`bg-card border-2 ${genderColor} ${selectedRing} rounded-lg shadow-sm cursor-pointer hover:shadow-md transition-all px-2 py-1.5 flex flex-col items-center justify-center relative`}
           onClick={() => onSelect(person)}
         >
-          <Avatar className="h-8 w-8 mb-1">
+          <Avatar className="h-8 w-8 mb-1 shrink-0">
             <AvatarImage src={person.avatar_url} />
             <AvatarFallback className="text-xs">
               {initials || <User className="h-3 w-3" />}
@@ -123,15 +131,15 @@ function TreeNode({ node, onSelect, onToggleCollapse, isSelected }: TreeNodeProp
           </Avatar>
           <span className="text-xs font-medium text-center line-clamp-2 leading-tight">
             {person.display_name}
+            {!person.is_living && <span className="text-muted-foreground"> †</span>}
           </span>
-          {!person.is_living && (
-            <span className="text-[10px] text-muted-foreground">†</span>
-          )}
-          
+
           {/* Collapse/Expand button */}
           {hasChildren && (
             <button
               className="absolute -bottom-3 left-1/2 -translate-x-1/2 w-6 h-6 bg-background border rounded-full flex items-center justify-center shadow-sm hover:bg-muted transition-colors z-10"
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleCollapse(person.id);
@@ -383,6 +391,12 @@ function buildTreeLayout(
     return result;
   };
 
+  // All children regardless of collapse state (so the toggle button stays after collapsing)
+  const hasAnyChildren = (personId: string): boolean => {
+    const fams = fatherToFamilies.get(personId) || [];
+    return fams.some((fam) => children.some((c) => c.family_id === fam.id));
+  };
+
   const getVisibleWife = (personId: string): string | null => {
     const fams = fatherToFamilies.get(personId) || [];
     for (const fam of fams) {
@@ -469,7 +483,9 @@ function buildTreeLayout(
       x: xPositions.get(person.id)!,
       y: (person.generation - minGen) * LEVEL_HEIGHT + 20,
       isCollapsed: collapsedNodes.has(person.id),
-      hasChildren: getVisibleChildrenAsFather(person.id).length > 0,
+      hasChildren:
+        getVisibleChildrenAsFather(person.id).length > 0 ||
+        (collapsedNodes.has(person.id) && hasAnyChildren(person.id)),
       isVisible: true,
     });
   }
