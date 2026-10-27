@@ -38,6 +38,7 @@ import {
   Search,
   X,
   GitBranch,
+  Undo2,
 } from 'lucide-react';
 import type { Person } from '@/types';
 import type { TreeData } from '@/lib/supabase-data';
@@ -48,18 +49,23 @@ import Link from 'next/link';
 // ═══════════════════════════════════════════════════════════════════════════
 
 const NODE_WIDTH = 120;
-const NODE_HEIGHT = 100;
+const NODE_HEIGHT = 96;
+const TOP_OVERFLOW = 10; // extra space above node for the in-law badge
 const BUTTON_OVERFLOW = 16; // extra space below node so collapse button is not clipped
 const LEVEL_HEIGHT = 140;
 const SIBLING_GAP = 20;
 const MINIMAP_WIDTH = 160;
 const MINIMAP_HEIGHT = 100;
+const OFFSETS_STORAGE_KEY = 'ancestortree:node-offsets:v1';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
 // ═══════════════════════════════════════════════════════════════════════════
 
 type ViewMode = 'all' | 'ancestors' | 'descendants';
+
+// Manual position adjustments made by the user (drag & drop), keyed by person id
+type NodeOffsets = Record<string, { dx: number; dy: number }>;
 
 interface TreeNodeData {
   person: Person;
@@ -68,6 +74,8 @@ interface TreeNodeData {
   isCollapsed: boolean;
   hasChildren: boolean;
   isVisible: boolean;
+  // Link to the spouse's family line (in-laws): 'Nhà ngoại' / 'Nhà chồng'
+  externalLink?: { personId: string; label: string };
 }
 
 interface TreeConnectionData {
@@ -89,10 +97,13 @@ interface TreeNodeProps {
   onSelect: (person: Person) => void;
   onToggleCollapse: (personId: string) => void;
   isSelected: boolean;
+  editMode: boolean;
+  onDragStart: (personId: string, clientX: number, clientY: number) => void;
+  onOpenExternal: (personId: string) => void;
 }
 
-function TreeNode({ node, onSelect, onToggleCollapse, isSelected }: TreeNodeProps) {
-  const { person, x, y, isCollapsed, hasChildren } = node;
+function TreeNode({ node, onSelect, onToggleCollapse, isSelected, editMode, onDragStart, onOpenExternal }: TreeNodeProps) {
+  const { person, x, y, isCollapsed, hasChildren, externalLink } = node;
   
   const initials = person.display_name
     .split(' ')
@@ -113,15 +124,25 @@ function TreeNode({ node, onSelect, onToggleCollapse, isSelected }: TreeNodeProp
     >
       <foreignObject
         x={x}
-        y={y}
+        y={y - TOP_OVERFLOW}
         width={NODE_WIDTH}
-        height={NODE_HEIGHT + BUTTON_OVERFLOW}
+        height={NODE_HEIGHT + BUTTON_OVERFLOW + TOP_OVERFLOW}
         style={{ overflow: 'visible' }}
       >
         <div
-          style={{ height: NODE_HEIGHT }}
-          className={`bg-card border-2 ${genderColor} ${selectedRing} rounded-lg shadow-sm cursor-pointer hover:shadow-md transition-all px-2 py-1.5 flex flex-col items-center justify-center relative`}
+          style={{ height: NODE_HEIGHT, marginTop: TOP_OVERFLOW }}
+          className={`bg-card border-2 ${genderColor} ${selectedRing} rounded-lg shadow-sm ${editMode ? 'cursor-move' : 'cursor-pointer'} hover:shadow-md transition-shadow px-2 py-1.5 flex flex-col items-center justify-center relative`}
           onClick={() => onSelect(person)}
+          onMouseDown={(e) => {
+            if (!editMode || e.button !== 0) return;
+            e.stopPropagation(); // don't pan the canvas while dragging a node
+            onDragStart(person.id, e.clientX, e.clientY);
+          }}
+          onTouchStart={(e) => {
+            if (!editMode || e.touches.length !== 1) return;
+            e.stopPropagation();
+            onDragStart(person.id, e.touches[0].clientX, e.touches[0].clientY);
+          }}
         >
           <Avatar className="h-8 w-8 mb-1 shrink-0">
             <AvatarImage src={person.avatar_url} />
@@ -133,6 +154,22 @@ function TreeNode({ node, onSelect, onToggleCollapse, isSelected }: TreeNodeProp
             {person.display_name}
             {!person.is_living && <span className="text-muted-foreground"> †</span>}
           </span>
+
+          {/* In-law badge: jump to the spouse's family line */}
+          {externalLink && (
+            <button
+              className="absolute -top-2.5 right-2 text-[10px] leading-none px-1.5 py-1 rounded-full border bg-background text-muted-foreground hover:text-foreground hover:bg-muted shadow-sm z-10"
+              title={`${externalLink.label} của ${person.display_name}`}
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenExternal(externalLink.personId);
+              }}
+            >
+              {externalLink.label} ›
+            </button>
+          )}
 
           {/* Collapse/Expand button */}
           {hasChildren && (
@@ -276,7 +313,8 @@ function buildTreeLayout(
   collapsedNodes: Set<string>,
   viewMode: ViewMode,
   focusPersonId: string | null,
-  filterRootId: string | null = null
+  filterRootId: string | null = null,
+  offsets: NodeOffsets = {}
 ) {
   const { people, families, children } = data;
 
@@ -302,45 +340,82 @@ function buildTreeLayout(
     }
   }
 
+  // A man's marriages in chronological order (first wife is placed closest to him)
+  const byMarriage = (a: (typeof families)[0], b: (typeof families)[0]) => {
+    if (a.marriage_date && b.marriage_date) {
+      const d = Date.parse(a.marriage_date) - Date.parse(b.marriage_date);
+      if (!isNaN(d) && d !== 0) return d;
+    }
+    return (a.sort_order ?? 0) - (b.sort_order ?? 0);
+  };
+  fatherToFamilies.forEach((list) => list.sort(byMarriage));
+
+  const personById = new Map(people.map((p) => [p.id, p]));
+
+  // Birth timestamp for ordering siblings (null = unknown)
+  const birthKey = (id: string): number | null => {
+    const p = personById.get(id);
+    if (!p) return null;
+    if (p.birth_date) {
+      const t = Date.parse(p.birth_date);
+      if (!isNaN(t)) return t;
+    }
+    if (p.birth_year) return Date.UTC(p.birth_year, 0, 1);
+    return null;
+  };
+
+  // Family surname = the surname most men carry (e.g. "Đinh"); other lines are in-laws
+  const surnameOf = (p: Person) => (p.surname || p.display_name.split(' ')[0] || '').trim();
+  const mainSurname = (() => {
+    const counts = new Map<string, number>();
+    for (const p of people) {
+      if (p.gender !== 1) continue;
+      const sn = surnameOf(p);
+      if (sn) counts.set(sn, (counts.get(sn) || 0) + 1);
+    }
+    let best = '';
+    let bestN = 0;
+    counts.forEach((n, sn) => { if (n > bestN) { best = sn; bestN = n; } });
+    return best;
+  })();
+
   // Visible people selection
   const getVisiblePeopleIds = (): Set<string> => {
     const visible = new Set<string>();
 
+    // Patriline traversal: person + wives + descendants through FATHERS only.
+    // A daughter is shown as a leaf; her husband and children belong to the husband's line.
+    const addPatriline = (personId: string, isStart: boolean) => {
+      if (visible.has(personId)) return;
+      visible.add(personId);
+      const fams = [
+        ...(fatherToFamilies.get(personId) || []),
+        ...(isStart ? motherToFamilies.get(personId) || [] : []),
+      ];
+      for (const fam of fams) {
+        if (fam.father_id) visible.add(fam.father_id);
+        if (fam.mother_id) visible.add(fam.mother_id);
+      }
+      if (collapsedNodes.has(personId)) return;
+      for (const fam of fams) {
+        children
+          .filter((c) => c.family_id === fam.id)
+          .forEach((c) => addPatriline(c.person_id, false));
+      }
+    };
+
     if (filterRootId) {
-      // Branch filter: show filterRootId and all descendants (follows both father and mother families)
-      const addWithDescendants = (personId: string) => {
-        if (visible.has(personId)) return;
-        visible.add(personId);
-        const fams = [
-          ...(fatherToFamilies.get(personId) || []),
-          ...(motherToFamilies.get(personId) || []),
-        ];
-        for (const fam of fams) {
-          if (fam.father_id && fam.father_id !== personId) visible.add(fam.father_id);
-          if (fam.mother_id && fam.mother_id !== personId) visible.add(fam.mother_id);
-          children
-            .filter((c) => c.family_id === fam.id)
-            .forEach((c) => addWithDescendants(c.person_id));
-        }
-      };
-      addWithDescendants(filterRootId);
+      addPatriline(filterRootId, true);
       return visible;
     }
 
     if (viewMode === 'all') {
-      people.forEach((p) => visible.add(p.id));
-      const hideDescendants = (personId: string) => {
-        const fams = fatherToFamilies.get(personId) || [];
-        for (const fam of fams) {
-          children
-            .filter((c) => c.family_id === fam.id)
-            .forEach((c) => {
-              visible.delete(c.person_id);
-              hideDescendants(c.person_id);
-            });
-        }
-      };
-      collapsedNodes.forEach((nodeId) => hideDescendants(nodeId));
+      // Main branch only: heads of lines carrying the main surname (in-law lines are reached via the badge)
+      for (const p of people) {
+        if (childToFamily.get(p.id)?.father_id) continue; // not a head of line
+        if (mainSurname && surnameOf(p) && surnameOf(p) !== mainSurname) continue;
+        addPatriline(p.id, true);
+      }
     } else if (viewMode === 'ancestors' && focusPersonId) {
       const addAncestors = (personId: string) => {
         visible.add(personId);
@@ -378,33 +453,6 @@ function buildTreeLayout(
     return { nodes: [], connections: [], width: 0, height: 0, offsetX: 0 };
   }
 
-  // Helpers
-  const getVisibleChildrenAsFather = (personId: string): string[] => {
-    const fams = fatherToFamilies.get(personId) || [];
-    const result: string[] = [];
-    for (const fam of fams) {
-      children
-        .filter((c) => c.family_id === fam.id && visibleIds.has(c.person_id))
-        .sort((a, b) => a.sort_order - b.sort_order)
-        .forEach((c) => { if (!result.includes(c.person_id)) result.push(c.person_id); });
-    }
-    return result;
-  };
-
-  // All children regardless of collapse state (so the toggle button stays after collapsing)
-  const hasAnyChildren = (personId: string): boolean => {
-    const fams = fatherToFamilies.get(personId) || [];
-    return fams.some((fam) => children.some((c) => c.family_id === fam.id));
-  };
-
-  const getVisibleWife = (personId: string): string | null => {
-    const fams = fatherToFamilies.get(personId) || [];
-    for (const fam of fams) {
-      if (fam.mother_id && visibleIds.has(fam.mother_id)) return fam.mother_id;
-    }
-    return null;
-  };
-
   // Wives will be positioned adjacent to husband — mark them
   const positionedAsWife = new Set<string>();
   for (const p of visiblePeople) {
@@ -416,6 +464,51 @@ function buildTreeLayout(
     }
   }
 
+  // Helpers
+  const getVisibleChildrenAsFather = (personId: string): string[] => {
+    const fams = fatherToFamilies.get(personId) || [];
+    const result: string[] = [];
+    for (const fam of fams) {
+      children
+        .filter(
+          (c) =>
+            c.family_id === fam.id &&
+            visibleIds.has(c.person_id) &&
+            // a person shown as someone's wife is placed next to her husband, not as a child
+            !positionedAsWife.has(c.person_id)
+        )
+        .sort((a, b) => {
+          // eldest first (leftmost); fall back to manual sort_order when birth is unknown/equal
+          const ka = birthKey(a.person_id);
+          const kb = birthKey(b.person_id);
+          if (ka !== null && kb !== null && ka !== kb) return ka - kb;
+          return a.sort_order - b.sort_order;
+        })
+        .forEach((c) => { if (!result.includes(c.person_id)) result.push(c.person_id); });
+    }
+    return result;
+  };
+
+  // All children regardless of collapse state (so the toggle button stays after collapsing)
+  const hasAnyChildren = (personId: string): boolean => {
+    const fams = fatherToFamilies.get(personId) || [];
+    return fams.some((fam) =>
+      children.some((c) => c.family_id === fam.id && !positionedAsWife.has(c.person_id))
+    );
+  };
+
+  // All visible wives of a man (supports multiple marriages), in family order
+  const getVisibleWives = (personId: string): string[] => {
+    const fams = fatherToFamilies.get(personId) || [];
+    const result: string[] = [];
+    for (const fam of fams) {
+      if (fam.mother_id && visibleIds.has(fam.mother_id) && !result.includes(fam.mother_id)) {
+        result.push(fam.mother_id);
+      }
+    }
+    return result;
+  };
+
   // Root nodes: not a wife, and no visible father
   const roots: string[] = [];
   for (const p of visiblePeople) {
@@ -426,13 +519,15 @@ function buildTreeLayout(
     }
   }
 
+  roots.sort((a, b) => (birthKey(a) ?? Infinity) - (birthKey(b) ?? Infinity));
+
   // Bottom-up: subtree widths
   const subtreeWidths = new Map<string, number>();
   const computeSubtreeWidth = (personId: string): number => {
     if (subtreeWidths.has(personId)) return subtreeWidths.get(personId)!;
-    const wife = getVisibleWife(personId);
+    const wives = getVisibleWives(personId);
     const visChildren = collapsedNodes.has(personId) ? [] : getVisibleChildrenAsFather(personId);
-    const coupleWidth = NODE_WIDTH + (wife ? COUPLE_GAP + NODE_WIDTH : 0);
+    const coupleWidth = NODE_WIDTH + wives.length * (COUPLE_GAP + NODE_WIDTH);
     const childrenWidth = visChildren.length > 0
       ? visChildren.reduce((s, c) => s + computeSubtreeWidth(c), 0) + (visChildren.length - 1) * SIBLING_GAP
       : 0;
@@ -444,17 +539,24 @@ function buildTreeLayout(
 
   // Top-down: assign X positions
   const xPositions = new Map<string, number>();
+  const wifeOf = new Map<string, string>(); // wifeId -> husbandId (keeps wives on the husband's row)
   const assignPositions = (personId: string, startX: number) => {
     const sw = subtreeWidths.get(personId) || NODE_WIDTH;
-    const wife = getVisibleWife(personId);
+    const wives = getVisibleWives(personId);
     const visChildren = collapsedNodes.has(personId) ? [] : getVisibleChildrenAsFather(personId);
-    const coupleWidth = NODE_WIDTH + (wife ? COUPLE_GAP + NODE_WIDTH : 0);
+    const coupleWidth = NODE_WIDTH + wives.length * (COUPLE_GAP + NODE_WIDTH);
     const centerX = startX + sw / 2;
 
     // Center couple unit
     const fatherX = centerX - coupleWidth / 2;
     xPositions.set(personId, fatherX);
-    if (wife) xPositions.set(wife, fatherX + NODE_WIDTH + COUPLE_GAP);
+    // Wives sit right next to the husband, in order
+    wives.forEach((w, i) => {
+      if (!xPositions.has(w)) {
+        xPositions.set(w, fatherX + (i + 1) * (NODE_WIDTH + COUPLE_GAP));
+        wifeOf.set(w, personId);
+      }
+    });
 
     // Children spread centered under couple
     if (visChildren.length > 0) {
@@ -474,20 +576,67 @@ function buildTreeLayout(
     rootStartX += (subtreeWidths.get(root) || NODE_WIDTH) + SIBLING_GAP * 2;
   }
 
-  const minGen = Math.min(...visiblePeople.map((p) => p.generation || 1));
+  const effGen = (person: Person): number => {
+    const husband = wifeOf.get(person.id);
+    return (husband ? personById.get(husband)?.generation : undefined) ?? person.generation ?? 1;
+  };
+  const placedPeople = visiblePeople.filter((p) => xPositions.has(p.id));
+  const minGen = placedPeople.length ? Math.min(...placedPeople.map(effGen)) : 1;
   const nodes: TreeNodeData[] = [];
   for (const person of visiblePeople) {
     if (!xPositions.has(person.id)) continue;
     nodes.push({
       person,
       x: xPositions.get(person.id)!,
-      y: (person.generation - minGen) * LEVEL_HEIGHT + 20,
+      y: (effGen(person) - minGen) * LEVEL_HEIGHT + 20,
       isCollapsed: collapsedNodes.has(person.id),
       hasChildren:
         getVisibleChildrenAsFather(person.id).length > 0 ||
         (collapsedNodes.has(person.id) && hasAnyChildren(person.id)),
       isVisible: true,
     });
+  }
+
+  // In-law badges: wives -> her parents' line ("Nhà ngoại"); married daughters -> husband's line ("Nhà chồng")
+  const topOfLine = (personId: string): string => {
+    let cur = personId;
+    const seen = new Set<string>();
+    while (!seen.has(cur)) {
+      seen.add(cur);
+      const f = childToFamily.get(cur)?.father_id;
+      if (!f) break;
+      cur = f;
+    }
+    return cur;
+  };
+  for (const n of nodes) {
+    const p = n.person;
+    if (positionedAsWife.has(p.id)) {
+      const pf = childToFamily.get(p.id);
+      const parentId = pf?.father_id ?? pf?.mother_id;
+      if (parentId && !visibleIds.has(parentId)) {
+        n.externalLink = { personId: topOfLine(parentId), label: 'Nhà ngoại' };
+      }
+    } else if (p.gender === 2) {
+      const fam = (motherToFamilies.get(p.id) || []).find(
+        (f) => f.father_id && !visibleIds.has(f.father_id)
+      );
+      if (fam?.father_id) n.externalLink = { personId: topOfLine(fam.father_id), label: 'Nhà chồng' };
+    }
+  }
+
+  // Origin stays stable while dragging: computed from positions BEFORE manual offsets
+  let baseMinX = Infinity;
+  for (const n of nodes) baseMinX = Math.min(baseMinX, n.x);
+  if (!isFinite(baseMinX)) baseMinX = 0;
+
+  // Apply manual offsets (drag & drop)
+  for (const n of nodes) {
+    const o = offsets[n.person.id];
+    if (o) {
+      n.x += o.dx;
+      n.y += o.dy;
+    }
   }
 
   // Build connections
@@ -499,14 +648,26 @@ function buildTreeLayout(
     const motherPos = family.mother_id ? personPos.get(family.mother_id) : null;
     if (!fatherPos && !motherPos) continue;
 
-    // Couple line (horizontal, between nodes)
+    // Couple line: connect the nearest edges (works wherever the boxes are dragged to)
     if (fatherPos && motherPos) {
+      const W = NODE_WIDTH;
+      const H = NODE_HEIGHT;
+      let x1: number, y1: number, x2: number, y2: number;
+      if (motherPos.x >= fatherPos.x + W) {
+        x1 = fatherPos.x + W; y1 = fatherPos.y + H / 2;
+        x2 = motherPos.x;     y2 = motherPos.y + H / 2;
+      } else if (fatherPos.x >= motherPos.x + W) {
+        x1 = fatherPos.x;     y1 = fatherPos.y + H / 2;
+        x2 = motherPos.x + W; y2 = motherPos.y + H / 2;
+      } else {
+        const fatherAbove = fatherPos.y <= motherPos.y;
+        x1 = fatherPos.x + W / 2; x2 = motherPos.x + W / 2;
+        y1 = fatherPos.y + (fatherAbove ? H : 0);
+        y2 = motherPos.y + (fatherAbove ? 0 : H);
+      }
       connections.push({
         id: `couple-${family.id}`,
-        x1: fatherPos.x + NODE_WIDTH,
-        y1: fatherPos.y + NODE_HEIGHT / 2,
-        x2: motherPos.x,
-        y2: motherPos.y + NODE_HEIGHT / 2,
+        x1, y1, x2, y2,
         type: 'couple',
         isVisible: true,
       });
@@ -517,19 +678,22 @@ function buildTreeLayout(
       (!family.father_id && family.mother_id && collapsedNodes.has(family.mother_id));
     if (parentIsCollapsed) continue;
 
-    const parentPos = fatherPos ?? motherPos!;
     const familyCenterX =
       fatherPos && motherPos
-        ? (fatherPos.x + NODE_WIDTH + motherPos.x) / 2
-        : parentPos.x + NODE_WIDTH / 2;
+        ? (fatherPos.x + motherPos.x) / 2 + NODE_WIDTH / 2
+        : (fatherPos ?? motherPos)!.x + NODE_WIDTH / 2;
+    const familyBottomY =
+      Math.max(fatherPos?.y ?? -Infinity, motherPos?.y ?? -Infinity) + NODE_HEIGHT;
 
     children.filter((c) => c.family_id === family.id).forEach((child) => {
+      // people shown as a wife are attached to their husband, not drawn as a child
+      if (positionedAsWife.has(child.person_id)) return;
       const childPos = personPos.get(child.person_id);
       if (childPos) {
         connections.push({
           id: `child-${family.id}-${child.person_id}`,
           x1: familyCenterX,
-          y1: parentPos.y + NODE_HEIGHT,
+          y1: familyBottomY,
           x2: childPos.x + NODE_WIDTH / 2,
           y2: childPos.y,
           type: 'parent-child',
@@ -553,8 +717,48 @@ function buildTreeLayout(
     connections,
     width: maxX - minX + 100,
     height: maxY + 50,
-    offsetX: -minX + 50,
+    offsetX: -baseMinX + 50,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Helpers for manual layout (drag & drop)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** A person + (if male) all wives + all descendants (and their wives) */
+function getBranchIds(personId: string, data: TreeData): string[] {
+  const ids = new Set<string>();
+  const visit = (id: string) => {
+    if (ids.has(id)) return;
+    ids.add(id);
+    for (const fam of data.families) {
+      if (fam.father_id !== id) continue;
+      if (fam.mother_id) ids.add(fam.mother_id);
+      data.children
+        .filter((c) => c.family_id === fam.id)
+        .forEach((c) => visit(c.person_id));
+    }
+  };
+  visit(personId);
+  return [...ids];
+}
+
+function loadOffsets(): NodeOffsets {
+  try {
+    const raw = localStorage.getItem(OFFSETS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as NodeOffsets) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveOffsets(offsets: NodeOffsets) {
+  try {
+    if (Object.keys(offsets).length === 0) localStorage.removeItem(OFFSETS_STORAGE_KEY);
+    else localStorage.setItem(OFFSETS_STORAGE_KEY, JSON.stringify(offsets));
+  } catch {
+    /* storage unavailable — layout just won't persist */
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -581,6 +785,13 @@ export function FamilyTree() {
       ? new URLSearchParams(window.location.search).get('root')
       : null
   );
+  // Manual arrangement (drag & drop)
+  const [editMode, setEditMode] = useState(false);
+  const [moveBranch, setMoveBranch] = useState(true);
+  const [offsets, setOffsets] = useState<NodeOffsets>(() =>
+    typeof window !== 'undefined' ? loadOffsets() : {}
+  );
+  const justDraggedRef = useRef(false);
   const [filterSearch, setFilterSearch] = useState('');
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
 
@@ -599,6 +810,20 @@ export function FamilyTree() {
   const filterRootPerson = filterRootId
     ? data?.people.find((p) => p.id === filterRootId) ?? null
     : null;
+
+  // Jump to the spouse's family line (in-law tree)
+  const handleOpenExternal = useCallback(
+    (personId: string) => {
+      const target = data?.people.find((p) => p.id === personId);
+      if (!target) return;
+      setCollapsedNodes(new Set());
+      setSelectedPerson(null);
+      setScale(1);
+      setPan({ x: 0, y: 0 });
+      handleSetFilterRoot(target);
+    },
+    [data, handleSetFilterRoot]
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
@@ -621,8 +846,8 @@ export function FamilyTree() {
   // Layout
   const layout = useMemo(() => {
     if (!data || data.people.length === 0) return null;
-    return buildTreeLayout(data, collapsedNodes, viewMode, selectedPerson?.id || null, filterRootId);
-  }, [data, collapsedNodes, viewMode, selectedPerson?.id, filterRootId]);
+    return buildTreeLayout(data, collapsedNodes, viewMode, selectedPerson?.id || null, filterRootId, offsets);
+  }, [data, collapsedNodes, viewMode, selectedPerson?.id, filterRootId, offsets]);
 
   // Handlers
   const handleZoomIn = () => setScale((s) => Math.min(s + 0.1, 2));
@@ -643,6 +868,69 @@ export function FamilyTree() {
       return next;
     });
   }, []);
+
+  // Ignore the click that ends a drag, so dragging doesn't also select the person
+  const handleSelectNode = useCallback((person: Person) => {
+    if (justDraggedRef.current) return;
+    setSelectedPerson(person);
+  }, []);
+
+  // Drag & drop a node (and optionally its whole branch)
+  const handleNodeDragStart = useCallback(
+    (personId: string, startClientX: number, startClientY: number) => {
+      if (!editMode || !data) return;
+      const ids = moveBranch ? getBranchIds(personId, data) : [personId];
+      const base = offsets;
+      const startScale = scale;
+      let moved = false;
+      let latest = base;
+
+      const move = (clientX: number, clientY: number) => {
+        if (!moved && Math.hypot(clientX - startClientX, clientY - startClientY) < 4) return;
+        moved = true;
+        justDraggedRef.current = true;
+        const ddx = (clientX - startClientX) / startScale;
+        const ddy = (clientY - startClientY) / startScale;
+        const next: NodeOffsets = { ...base };
+        for (const id of ids) {
+          const o = base[id] ?? { dx: 0, dy: 0 };
+          next[id] = { dx: o.dx + ddx, dy: o.dy + ddy };
+        }
+        latest = next;
+        setOffsets(next);
+      };
+
+      const onMouseMove = (e: MouseEvent) => move(e.clientX, e.clientY);
+      const onTouchMove = (e: TouchEvent) => {
+        if (e.touches.length !== 1) return;
+        e.preventDefault();
+        move(e.touches[0].clientX, e.touches[0].clientY);
+      };
+      const end = () => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', end);
+        window.removeEventListener('touchmove', onTouchMove);
+        window.removeEventListener('touchend', end);
+        window.removeEventListener('touchcancel', end);
+        if (moved) {
+          saveOffsets(latest);
+          setTimeout(() => { justDraggedRef.current = false; }, 0);
+        }
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', end);
+      window.addEventListener('touchmove', onTouchMove, { passive: false });
+      window.addEventListener('touchend', end);
+      window.addEventListener('touchcancel', end);
+    },
+    [editMode, data, moveBranch, offsets, scale]
+  );
+
+  const handleResetLayout = () => {
+    setOffsets({});
+    saveOffsets({});
+  };
 
   // Pan handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -826,12 +1114,18 @@ export function FamilyTree() {
         )}
 
         {filterRootPerson && (
+          <Button variant="outline" size="sm" onClick={() => handleSetFilterRoot(null)}>
+            ← Về nhánh chính
+          </Button>
+        )}
+
+        {filterRootPerson && (
           <span className="text-xs text-muted-foreground ml-auto">
             Nhánh {filterRootPerson.display_name} · Đời {filterRootPerson.generation}
           </span>
         )}
         {!filterRootPerson && (
-          <span className="text-xs text-muted-foreground ml-auto">Đang xem: Toàn bộ gia phả</span>
+          <span className="text-xs text-muted-foreground ml-auto">Đang xem: Nhánh chính</span>
         )}
       </div>
 
@@ -889,10 +1183,44 @@ export function FamilyTree() {
           Minimap
         </Button>
 
+        {/* Arrange mode (drag & drop nodes) */}
+        <Button
+          variant={editMode ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => setEditMode((v) => !v)}
+        >
+          <Move className="h-4 w-4 mr-2" />
+          {editMode ? 'Xong' : 'Sắp xếp'}
+        </Button>
+        {editMode && (
+          <>
+            <Button
+              variant={moveBranch ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setMoveBranch((v) => !v)}
+              title="Bật: kéo một người sẽ kéo theo vợ/chồng và con cháu"
+            >
+              <GitBranch className="h-4 w-4 mr-2" />
+              Kéo cả nhánh: {moveBranch ? 'Bật' : 'Tắt'}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleResetLayout}
+              disabled={Object.keys(offsets).length === 0}
+            >
+              <Undo2 className="h-4 w-4 mr-2" />
+              Đặt lại vị trí
+            </Button>
+          </>
+        )}
+
         {/* Pan indicator */}
         <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
           <Move className="h-3 w-3" />
-          <span className="hidden sm:inline">Kéo để di chuyển</span>
+          <span className="hidden sm:inline">
+            {editMode ? 'Kéo từng ô để sắp xếp (lưu trên trình duyệt này)' : 'Kéo để di chuyển'}
+          </span>
         </div>
       </div>
 
@@ -916,7 +1244,7 @@ export function FamilyTree() {
       <div
         ref={containerCallbackRef}
         className="border rounded-lg bg-muted/30 overflow-hidden relative select-none"
-        style={{ height: '60vh', cursor: isPanning ? 'grabbing' : 'grab' }}
+        style={{ height: '60vh', cursor: isPanning ? 'grabbing' : 'grab', touchAction: 'none' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -946,9 +1274,12 @@ export function FamilyTree() {
                   <TreeNode
                     key={node.person.id}
                     node={node}
-                    onSelect={setSelectedPerson}
+                    onSelect={handleSelectNode}
                     onToggleCollapse={handleToggleCollapse}
                     isSelected={selectedPerson?.id === node.person.id}
+                    editMode={editMode}
+                    onDragStart={handleNodeDragStart}
+                    onOpenExternal={handleOpenExternal}
                   />
                 ))}
               </AnimatePresence>
