@@ -9,6 +9,7 @@
 import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/components/layout/app-sidebar';
 import { Separator } from '@/components/ui/separator';
+import { ThemeToggle } from '@/components/layout/theme-toggle';
 
 export default function MainLayout({
   children,
@@ -23,6 +24,7 @@ export default function MainLayout({
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 h-4" />
           <div className="flex-1" />
+          <ThemeToggle />
         </header>
         <main className="flex-1 overflow-auto">
           {children}
