@@ -10,7 +10,10 @@
 
 import { useMemo, useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useTreeData } from '@/hooks/use-families';
+import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { useTreeData, familyKeys } from '@/hooks/use-families';
+import { useAuth } from '@/components/auth/auth-provider';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -30,6 +33,7 @@ import {
   User,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   Move,
   Maximize2,
   Users,
@@ -42,6 +46,7 @@ import {
 } from 'lucide-react';
 import type { Person } from '@/types';
 import type { TreeData } from '@/lib/supabase-data';
+import { updateChildrenOrder } from '@/lib/supabase-data';
 import Link from 'next/link';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -67,6 +72,13 @@ type ViewMode = 'all' | 'ancestors' | 'descendants';
 // Manual position adjustments made by the user (drag & drop), keyed by person id
 type NodeOffsets = Record<string, { dx: number; dy: number }>;
 
+// Position of a person among siblings of the same parents (left = eldest)
+interface SiblingNav {
+  familyId: string;
+  index: number;
+  orderedIds: string[];
+}
+
 interface TreeNodeData {
   person: Person;
   x: number;
@@ -76,6 +88,7 @@ interface TreeNodeData {
   isVisible: boolean;
   // Link to the spouse's family line (in-laws): 'Nhà ngoại' / 'Nhà chồng'
   externalLink?: { personId: string; label: string };
+  siblingNav?: SiblingNav;
 }
 
 interface TreeConnectionData {
@@ -100,10 +113,12 @@ interface TreeNodeProps {
   editMode: boolean;
   onDragStart: (personId: string, clientX: number, clientY: number) => void;
   onOpenExternal: (personId: string) => void;
+  canArrange: boolean;
+  onMoveSibling: (nav: SiblingNav, dir: -1 | 1) => void;
 }
 
-function TreeNode({ node, onSelect, onToggleCollapse, isSelected, editMode, onDragStart, onOpenExternal }: TreeNodeProps) {
-  const { person, x, y, isCollapsed, hasChildren, externalLink } = node;
+function TreeNode({ node, onSelect, onToggleCollapse, isSelected, editMode, onDragStart, onOpenExternal, canArrange, onMoveSibling }: TreeNodeProps) {
+  const { person, x, y, isCollapsed, hasChildren, externalLink, siblingNav } = node;
   
   const initials = person.display_name
     .split(' ')
@@ -154,6 +169,32 @@ function TreeNode({ node, onSelect, onToggleCollapse, isSelected, editMode, onDr
             {person.display_name}
             {!person.is_living && <span className="text-muted-foreground"> †</span>}
           </span>
+
+          {/* Reorder among siblings (saved to database): left = eldest */}
+          {editMode && canArrange && siblingNav && (
+            <>
+              <button
+                disabled={siblingNav.index === 0}
+                className="absolute left-0.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30 disabled:pointer-events-none z-10"
+                title="Dời sang trái (lớn hơn)"
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onMoveSibling(siblingNav, -1); }}
+              >
+                <ChevronLeft className="h-3 w-3" />
+              </button>
+              <button
+                disabled={siblingNav.index === siblingNav.orderedIds.length - 1}
+                className="absolute right-0.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30 disabled:pointer-events-none z-10"
+                title="Dời sang phải (nhỏ hơn)"
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onMoveSibling(siblingNav, 1); }}
+              >
+                <ChevronRight className="h-3 w-3" />
+              </button>
+            </>
+          )}
 
           {/* In-law badge: jump to the spouse's family line */}
           {externalLink && (
@@ -364,6 +405,18 @@ function buildTreeLayout(
     return null;
   };
 
+  // Sibling order (left = eldest): saved sort_order wins; birth date breaks ties
+  const compareSiblings = (
+    a: { person_id: string; sort_order: number },
+    b: { person_id: string; sort_order: number }
+  ) => {
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+    const ka = birthKey(a.person_id);
+    const kb = birthKey(b.person_id);
+    if (ka !== null && kb !== null && ka !== kb) return ka - kb;
+    return 0;
+  };
+
   // Family surname = the surname most men carry (e.g. "Đinh"); other lines are in-laws
   const surnameOf = (p: Person) => (p.surname || p.display_name.split(' ')[0] || '').trim();
   const mainSurname = (() => {
@@ -477,13 +530,7 @@ function buildTreeLayout(
             // a person shown as someone's wife is placed next to her husband, not as a child
             !positionedAsWife.has(c.person_id)
         )
-        .sort((a, b) => {
-          // eldest first (leftmost); fall back to manual sort_order when birth is unknown/equal
-          const ka = birthKey(a.person_id);
-          const kb = birthKey(b.person_id);
-          if (ka !== null && kb !== null && ka !== kb) return ka - kb;
-          return a.sort_order - b.sort_order;
-        })
+        .sort(compareSiblings)
         .forEach((c) => { if (!result.includes(c.person_id)) result.push(c.person_id); });
     }
     return result;
@@ -594,6 +641,21 @@ function buildTreeLayout(
         getVisibleChildrenAsFather(person.id).length > 0 ||
         (collapsedNodes.has(person.id) && hasAnyChildren(person.id)),
       isVisible: true,
+    });
+  }
+
+  // Sibling navigation (◀ ▶ buttons in arrange mode)
+  const nodeById = new Map(nodes.map((n) => [n.person.id, n]));
+  for (const fam of families) {
+    const ordered = children
+      .filter(
+        (c) => c.family_id === fam.id && !positionedAsWife.has(c.person_id) && nodeById.has(c.person_id)
+      )
+      .sort(compareSiblings)
+      .map((c) => c.person_id);
+    if (ordered.length < 2) continue;
+    ordered.forEach((id, index) => {
+      nodeById.get(id)!.siblingNav = { familyId: fam.id, index, orderedIds: ordered };
     });
   }
 
@@ -823,6 +885,26 @@ export function FamilyTree() {
       handleSetFilterRoot(target);
     },
     [data, handleSetFilterRoot]
+  );
+
+  // Reorder siblings (admin/editor only; saved in database for everyone)
+  const queryClient = useQueryClient();
+  const { profile } = useAuth();
+  const canArrange = profile?.role === 'admin' || profile?.role === 'editor';
+  const handleMoveSibling = useCallback(
+    async (nav: SiblingNav, dir: -1 | 1) => {
+      const to = nav.index + dir;
+      if (to < 0 || to >= nav.orderedIds.length) return;
+      const next = [...nav.orderedIds];
+      [next[nav.index], next[to]] = [next[to], next[nav.index]];
+      try {
+        await updateChildrenOrder(nav.familyId, next);
+        await queryClient.invalidateQueries({ queryKey: familyKeys.tree() });
+      } catch (e) {
+        toast.error('Không lưu được thứ tự: ' + (e instanceof Error ? e.message : 'lỗi không xác định'));
+      }
+    },
+    [queryClient]
   );
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1219,7 +1301,7 @@ export function FamilyTree() {
         <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
           <Move className="h-3 w-3" />
           <span className="hidden sm:inline">
-            {editMode ? 'Kéo từng ô để sắp xếp (lưu trên trình duyệt này)' : 'Kéo để di chuyển'}
+            {editMode ? 'Kéo ô để dời chỗ (lưu trên máy này) · ◀ ▶ đổi thứ tự anh em (lưu cho cả họ)' : 'Kéo để di chuyển'}
           </span>
         </div>
       </div>
@@ -1280,6 +1362,8 @@ export function FamilyTree() {
                     editMode={editMode}
                     onDragStart={handleNodeDragStart}
                     onOpenExternal={handleOpenExternal}
+                    canArrange={canArrange}
+                    onMoveSibling={handleMoveSibling}
                   />
                 ))}
               </AnimatePresence>
