@@ -206,7 +206,7 @@ export default function PersonDetailPage({ params }: PageProps) {
                 <Calendar className="h-4 w-4 text-muted-foreground" />
                 <span>
                   {person.birth_date || person.birth_year || 'Chưa rõ'}
-                  {person.birth_year && ` (${getZodiacYear(person.birth_year)})`}
+                  {person.birth_year ? ` (${getZodiacYear(person.birth_year)})` : null}
                 </span>
               </div>
               {person.birth_place && (
