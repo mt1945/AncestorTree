@@ -102,7 +102,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                   <FormItem>
                     <FormLabel>Tên hiển thị *</FormLabel>
                     <FormControl>
-                      <Input placeholder="Nguyễn Văn A" {...field} />
+                      <Input placeholder="Đinh Văn A" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -116,7 +116,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                   <FormItem>
                     <FormLabel>Handle *</FormLabel>
                     <FormControl>
-                      <Input placeholder="nguyen-van-a" {...field} />
+                      <Input placeholder="dinh-van-a" {...field} />
                     </FormControl>
                     <FormDescription>URL-friendly, không dấu</FormDescription>
                     <FormMessage />
@@ -133,7 +133,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                   <FormItem>
                     <FormLabel>Họ</FormLabel>
                     <FormControl>
-                      <Input placeholder="Đặng" {...field} />
+                      <Input placeholder="Đinh" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -146,7 +146,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                   <FormItem>
                     <FormLabel>Tên đệm</FormLabel>
                     <FormControl>
-                      <Input placeholder="Đình" {...field} />
+                      <Input placeholder="Văn" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -159,7 +159,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                   <FormItem>
                     <FormLabel>Tên</FormLabel>
                     <FormControl>
-                      <Input placeholder="Tài" {...field} />
+                      <Input placeholder="A" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -338,7 +338,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                     <FormControl>
                       <Input 
                         type="number" 
-                        placeholder="1990" 
+                        placeholder="yyyy" 
                         {...field}
                         value={field.value ?? ''}
                         onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value) : undefined)}
@@ -368,7 +368,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                   <FormItem>
                     <FormLabel>Nơi sinh</FormLabel>
                     <FormControl>
-                      <Input placeholder="Hà Tĩnh" {...field} />
+                      <Input placeholder="Hà Nội" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -387,7 +387,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                       <FormControl>
                         <Input 
                           type="number" 
-                          placeholder="2020" 
+                          placeholder="yyyy" 
                           {...field}
                           value={field.value ?? ''}
                           onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value) : undefined)}
@@ -417,7 +417,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                     <FormItem>
                       <FormLabel>Ngày giỗ (Âm)</FormLabel>
                       <FormControl>
-                        <Input placeholder="15/7" {...field} />
+                        <Input placeholder="dd/mm" {...field} />
                       </FormControl>
                       <FormDescription>DD/MM</FormDescription>
                       <FormMessage />
