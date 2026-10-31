@@ -341,7 +341,10 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                         placeholder="yyyy" 
                         {...field}
                         value={field.value ?? ''}
-                        onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value) : undefined)}
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value);
+                          field.onChange(n > 0 ? n : undefined);
+                        }}
                       />
                     </FormControl>
                     <FormMessage />
@@ -390,7 +393,10 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                           placeholder="yyyy" 
                           {...field}
                           value={field.value ?? ''}
-                          onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value) : undefined)}
+                          onChange={(e) => {
+                            const n = parseInt(e.target.value);
+                            field.onChange(n > 0 ? n : undefined);
+                          }}
                         />
                       </FormControl>
                       <FormMessage />
