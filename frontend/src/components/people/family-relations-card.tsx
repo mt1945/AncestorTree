@@ -70,6 +70,7 @@ interface QuickPersonData {
   generation: number;
   is_living: boolean;
   death_year: string;
+  death_lunar: string;
 }
 
 interface QuickPersonFormProps {
@@ -91,6 +92,7 @@ function QuickPersonForm({
   const [generation, setGeneration] = useState(defaultGeneration);
   const [isLiving, setIsLiving] = useState(true);
   const [deathYear, setDeathYear] = useState('');
+  const [deathLunar, setDeathLunar] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,6 +104,7 @@ function QuickPersonForm({
       generation,
       is_living: isLiving,
       death_year: isLiving ? '' : deathYear,
+      death_lunar: isLiving ? '' : deathLunar.trim(),
     });
   };
 
@@ -176,14 +179,26 @@ function QuickPersonForm({
         Đã mất
       </label>
       {!isLiving && (
-        <div className="space-y-1">
-          <Label htmlFor="qf-death-year">Năm mất (để trống nếu chưa rõ)</Label>
-          <Input
-            id="qf-death-year"
-            type="number"
-            value={deathYear}
-            onChange={(e) => setDeathYear(e.target.value)}
-          />
+        <div className="grid grid-cols-2 gap-3 items-start">
+          <div className="space-y-1">
+            <Label htmlFor="qf-death-year">Năm mất</Label>
+            <Input
+              id="qf-death-year"
+              type="number"
+              placeholder="Để trống nếu chưa rõ"
+              value={deathYear}
+              onChange={(e) => setDeathYear(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="qf-death-lunar">Ngày giỗ (Âm)</Label>
+            <Input
+              id="qf-death-lunar"
+              placeholder="DD/MM (vd: 15/7)"
+              value={deathLunar}
+              onChange={(e) => setDeathLunar(e.target.value)}
+            />
+          </div>
         </div>
       )}
       <Button type="submit" className="w-full" disabled={isLoading || !name.trim()}>
@@ -300,6 +315,7 @@ function AddRelationDialog({
         birth_year: data.birth_year ? Number(data.birth_year) : undefined,
         is_living: data.is_living,
         death_year: data.death_year ? Number(data.death_year) : undefined,
+        death_lunar: data.death_lunar || undefined,
         is_patrilineal: data.gender === 1,
         privacy_level: 0,
       });
