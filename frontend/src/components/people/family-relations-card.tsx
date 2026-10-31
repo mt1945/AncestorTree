@@ -68,6 +68,8 @@ interface QuickPersonData {
   gender: 1 | 2;
   birth_year: string;
   generation: number;
+  is_living: boolean;
+  death_year: string;
 }
 
 interface QuickPersonFormProps {
@@ -87,6 +89,8 @@ function QuickPersonForm({
   const [gender, setGender] = useState<1 | 2>(defaultGender);
   const [birthYear, setBirthYear] = useState('');
   const [generation, setGeneration] = useState(defaultGeneration);
+  const [isLiving, setIsLiving] = useState(true);
+  const [deathYear, setDeathYear] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,6 +100,8 @@ function QuickPersonForm({
       gender,
       birth_year: birthYear,
       generation,
+      is_living: isLiving,
+      death_year: isLiving ? '' : deathYear,
     });
   };
 
@@ -161,6 +167,25 @@ function QuickPersonForm({
           onChange={(e) => setGeneration(Number(e.target.value))}
         />
       </div>
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!isLiving}
+          onChange={(e) => setIsLiving(!e.target.checked)}
+        />
+        Đã mất
+      </label>
+      {!isLiving && (
+        <div className="space-y-1">
+          <Label htmlFor="qf-death-year">Năm mất (để trống nếu chưa rõ)</Label>
+          <Input
+            id="qf-death-year"
+            type="number"
+            value={deathYear}
+            onChange={(e) => setDeathYear(e.target.value)}
+          />
+        </div>
+      )}
       <Button type="submit" className="w-full" disabled={isLoading || !name.trim()}>
         {isLoading ? 'Đang lưu...' : 'Lưu'}
       </Button>
@@ -273,7 +298,8 @@ function AddRelationDialog({
         gender: data.gender,
         generation: data.generation,
         birth_year: data.birth_year ? Number(data.birth_year) : undefined,
-        is_living: true,
+        is_living: data.is_living,
+        death_year: data.death_year ? Number(data.death_year) : undefined,
         is_patrilineal: data.gender === 1,
         privacy_level: 0,
       });
