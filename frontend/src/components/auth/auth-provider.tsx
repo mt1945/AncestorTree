@@ -55,14 +55,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     // Listen for auth changes
+    // LƯU Ý: callback này KHÔNG được async/await query Supabase bên trong,
+    // nếu không sẽ deadlock khi token refresh (mọi request sau đó treo mãi).
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, s) => {
+      (_event, s) => {
         setSession(s);
         setUser(s?.user ?? null);
 
         if (s?.user) {
-          const p = await fetchProfile(s.user.id);
-          setProfile(p);
+          // Hoãn ra ngoài callback để thoát khỏi khóa của thư viện auth
+          setTimeout(async () => {
+            const p = await fetchProfile(s.user.id);
+            setProfile(p);
+          }, 0);
         } else {
           setProfile(null);
         }
