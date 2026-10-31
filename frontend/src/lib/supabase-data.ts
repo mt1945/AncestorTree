@@ -190,6 +190,21 @@ export async function createFamily(input: Omit<Family, 'id' | 'created_at' | 'up
   return data;
 }
 
+/** Save sibling order: persons are written sort_order = 0,1,2... in the given order (left = eldest). */
+export async function updateChildrenOrder(familyId: string, orderedPersonIds: string[]): Promise<void> {
+  const results = await Promise.all(
+    orderedPersonIds.map((personId, index) =>
+      supabase
+        .from('children')
+        .update({ sort_order: index })
+        .eq('family_id', familyId)
+        .eq('person_id', personId)
+    )
+  );
+  const failed = results.find((r) => r.error);
+  if (failed?.error) throw failed.error;
+}
+
 export async function addChildToFamily(familyId: string, personId: string, sortOrder: number): Promise<void> {
   const { error } = await supabase
     .from('children')
