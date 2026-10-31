@@ -38,7 +38,10 @@ export default function EditPersonPage({ params }: PageProps) {
       return;
     }
     try {
-      await updateMutation.mutateAsync({ id, input: data });
+      await updateMutation.mutateAsync({
+        id,
+        input: { ...data, birth_year: data.birth_year ?? null, death_year: data.death_year ?? null } as typeof data,
+      });
       toast.success('Đã cập nhật thành công');
       router.push(`/people/${id}`);
     } catch (err: unknown) {
