@@ -377,7 +377,7 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
             </div>
 
             {!isLiving && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
                 <FormField
                   control={form.control}
                   name="death_year"
@@ -419,7 +419,6 @@ export function PersonForm({ person, defaultValues: extraDefaults, lockedGenerat
                       <FormControl>
                         <Input placeholder="dd/mm" {...field} />
                       </FormControl>
-                      <FormDescription>DD/MM</FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
